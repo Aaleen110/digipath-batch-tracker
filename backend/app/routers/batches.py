@@ -14,6 +14,11 @@ from app.schemas import (
     UpdateStatusRequest,
 )
 from app.services.batch_service import is_valid_transition
+from app.services.notify import (
+    UnsafeWebhookURLError,
+    WebhookNotificationError,
+    notify_webhook,
+)
 
 
 router = APIRouter(
@@ -135,6 +140,9 @@ def update_batch_status(
             ),
         )
 
+    # The status check is part of the UPDATE itself. This makes the
+    # transition atomic and prevents two concurrent requests from
+    # both successfully changing the same state.
     result = db.execute(
         update(Batch)
         .where(
@@ -216,3 +224,63 @@ def list_batches(
         page_size=page_size,
         total=total,
     )
+
+
+@router.post(
+    "/{batch_id}/notify",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def notify_batch(
+    batch_id: int,
+    db: Session = Depends(get_db),
+):
+    batch = (
+        db.query(Batch)
+        .filter(Batch.id == batch_id)
+        .first()
+    )
+
+    if not batch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found",
+        )
+
+    if not batch.partner_webhook:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Batch does not have a partner webhook URL",
+        )
+
+    payload = {
+        "batch_id": batch.id,
+        "sample_id": batch.sample_id,
+        "batch_type": batch.batch_type,
+        "status": batch.status,
+        "result": batch.result,
+    }
+
+    try:
+        notify_webhook(
+            webhook_url=batch.partner_webhook,
+            payload=payload,
+        )
+
+    except UnsafeWebhookURLError as exc:
+        # Never expose internal networking details to the API consumer.
+        # The service logs/security layer can capture the detailed reason.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or unsafe webhook URL",
+        ) from exc
+
+    except WebhookNotificationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "message": "Batch notification sent successfully",
+        "batch_id": batch.id,
+    }
