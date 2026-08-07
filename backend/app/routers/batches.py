@@ -1,19 +1,20 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import verify_api_key
 from app.database import get_db
 from app.models import Batch
-from app.schemas import BatchResponse, CreateBatchRequest
-
-from sqlalchemy import update
-
 from app.schemas import (
+    BatchListResponse,
+    BatchResponse,
     BatchStatus,
+    CreateBatchRequest,
     UpdateStatusRequest,
 )
 from app.services.batch_service import is_valid_transition
+
 
 router = APIRouter(
     prefix="/batches",
@@ -99,7 +100,8 @@ def get_batch(
         )
 
     return batch
-    
+
+
 @router.patch(
     "/{batch_id}/status",
     response_model=BatchResponse,
@@ -154,3 +156,63 @@ def update_batch_status(
     db.refresh(batch)
 
     return batch
+
+
+@router.get(
+    "",
+    response_model=BatchListResponse,
+)
+def list_batches(
+    status_filter: BatchStatus | None = Query(
+        default=None,
+        alias="status",
+    ),
+    batch_type: str | None = Query(
+        default=None,
+        alias="type",
+        min_length=1,
+        max_length=100,
+    ),
+    page: int = Query(
+        default=1,
+        ge=1,
+    ),
+    page_size: int = Query(
+        default=20,
+        ge=1,
+        le=100,
+    ),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Batch)
+
+    if status_filter is not None:
+        query = query.filter(
+            Batch.status == status_filter.value
+        )
+
+    if batch_type is not None:
+        query = query.filter(
+            Batch.batch_type == batch_type
+        )
+
+    total = query.with_entities(
+        func.count(Batch.id)
+    ).scalar()
+
+    offset = (page - 1) * page_size
+
+    batches = (
+        query
+        .order_by(Batch.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    return BatchListResponse(
+        items=batches,
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
