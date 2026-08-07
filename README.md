@@ -4,9 +4,13 @@ Full-stack diagnostic batch tracking system to be built as part of the DigiPathA
 
 ## Stack
 
-- FastAPI
+
 - Python
-- SQLAlchemy
+- FastAPI - Framework
+- SQLAlchemy - ORM
 - SQLite
 - React
 - TypeScript
+
+Run app:
+uvicorn app.main:app --reload
