@@ -185,3 +185,47 @@ def test_authentication_failure(client):
     data = response.json()
 
     assert data["detail"] == "Invalid API key"
+
+
+# idempotency test
+def test_create_batch_is_idempotent(client):
+    headers = {
+        "X-API-Key": "dev-secret-key",
+        "Idempotency-Key": "test-idempotency-001",
+    }
+
+    payload = {
+        "sample_id": "SAMPLE-IDEMPOTENT-001",
+        "batch_type": "PCR",
+        "submitted_by": "lab-user-01",
+    }
+
+    # First request creates the batch.
+    first_response = client.post(
+        "/batches",
+        headers=headers,
+        json=payload,
+    )
+
+    assert first_response.status_code == 201
+
+    first_batch = first_response.json()
+
+    # Retry the exact same request with the same idempotency key.
+    second_response = client.post(
+        "/batches",
+        headers=headers,
+        json=payload,
+    )
+
+    assert second_response.status_code == 201
+
+    second_batch = second_response.json()
+
+    # The retry must return the original batch rather than creating
+    # a second database record.
+    assert second_batch["id"] == first_batch["id"]
+
+    assert second_batch["sample_id"] == first_batch["sample_id"]
+    assert second_batch["batch_type"] == first_batch["batch_type"]
+    assert second_batch["submitted_by"] == first_batch["submitted_by"]
