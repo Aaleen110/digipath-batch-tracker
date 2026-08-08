@@ -229,3 +229,160 @@ def test_create_batch_is_idempotent(client):
     assert second_batch["sample_id"] == first_batch["sample_id"]
     assert second_batch["batch_type"] == first_batch["batch_type"]
     assert second_batch["submitted_by"] == first_batch["submitted_by"]
+
+
+#filtering by status
+def test_list_batches_with_status_filter(client):
+    headers = {
+        "X-API-Key": "dev-secret-key",
+    }
+
+    # Create two batches.
+    first_response = client.post(
+        "/batches",
+        headers={
+            **headers,
+            "Idempotency-Key": "test-list-status-001",
+        },
+        json={
+            "sample_id": "SAMPLE-LIST-001",
+            "batch_type": "PCR",
+            "submitted_by": "lab-user-01",
+        },
+    )
+
+    second_response = client.post(
+        "/batches",
+        headers={
+            **headers,
+            "Idempotency-Key": "test-list-status-002",
+        },
+        json={
+            "sample_id": "SAMPLE-LIST-002",
+            "batch_type": "RNA",
+            "submitted_by": "lab-user-02",
+        },
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+
+    first_batch_id = first_response.json()["id"]
+
+    # Move the first batch from queued -> processing.
+    status_response = client.patch(
+        f"/batches/{first_batch_id}/status",
+        headers=headers,
+        json={
+            "status": "processing",
+        },
+    )
+
+    assert status_response.status_code == 200
+
+    # Filter the list by status.
+    response = client.get(
+        "/batches",
+        headers=headers,
+        params={
+            "status": "processing",
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    # Every returned batch must match the requested status.
+    assert all(batch["status"] == "processing" for batch in data["items"])
+
+    # Our first batch should be present in the filtered result.
+    assert any(batch["id"] == first_batch_id for batch in data["items"])
+
+
+#filtering by batch type
+def test_list_batches_with_type_filter(client):
+    headers = {
+        "X-API-Key": "dev-secret-key",
+    }
+
+    client.post(
+        "/batches",
+        headers={
+            **headers,
+            "Idempotency-Key": "test-list-type-001",
+        },
+        json={
+            "sample_id": "SAMPLE-TYPE-001",
+            "batch_type": "PCR",
+            "submitted_by": "lab-user-01",
+        },
+    )
+
+    client.post(
+        "/batches",
+        headers={
+            **headers,
+            "Idempotency-Key": "test-list-type-002",
+        },
+        json={
+            "sample_id": "SAMPLE-TYPE-002",
+            "batch_type": "RNA",
+            "submitted_by": "lab-user-02",
+        },
+    )
+
+    response = client.get(
+        "/batches",
+        headers=headers,
+        params={
+            "type": "RNA",
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert all(batch["batch_type"] == "RNA" for batch in data["items"])
+
+
+#pagination test
+def test_list_batches_pagination(client):
+    headers = {
+        "X-API-Key": "dev-secret-key",
+    }
+
+    # Create three batches.
+    for index in range(3):
+        response = client.post(
+            "/batches",
+            headers={
+                **headers,
+                "Idempotency-Key": f"test-pagination-{index}",
+            },
+            json={
+                "sample_id": f"SAMPLE-PAGE-{index}",
+                "batch_type": "PCR",
+                "submitted_by": "lab-user-01",
+            },
+        )
+
+        assert response.status_code == 201
+
+    response = client.get(
+        "/batches",
+        headers=headers,
+        params={
+            "page": 1,
+            "page_size": 2,
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert len(data["items"]) == 2
+    assert data["page"] == 1
+    assert data["page_size"] == 2
