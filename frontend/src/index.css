@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #f5f7f2;
+  --color-ink: #122e2b;
+  --color-teal: #0b5e59;
+  --color-teal-dark: #083f3c;
+  --color-teal-light: #e5f0ee;
+  --color-amber: #b8791c;
+  --color-amber-light: #fbf0dd;
+  --color-leaf: #1f7a4d;
+  --color-leaf-light: #e7f5ec;
+  --color-brick: #b23a3a;
+  --color-brick-light: #fbeaea;
+  --color-slate2: #5b6b68;
+  --color-slate2-light: #eaeeec;
+  --color-line: #e1e5df;
+
+  --font-display: "Space Grotesk", sans-serif;
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  --shadow-card: 0 1px 2px rgba(18, 46, 43, 0.06), 0 1px 1px rgba(18, 46, 43, 0.04);
+  --shadow-liftedcard: 0 8px 20px rgba(18, 46, 43, 0.1);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-paper);
+}
+
+@keyframes toastin {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.toast-anim {
+  animation: toastin 0.25s ease-out;
+}
+
+::selection {
+  background: #0b5e59;
+  color: #fff;
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid #0b5e59;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
