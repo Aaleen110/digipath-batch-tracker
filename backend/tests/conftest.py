@@ -8,10 +8,12 @@ from app.database import Base, get_db
 from app.main import app
 
 
-# SQLite normally creates a separate in-memory database connection
-# for each connection. StaticPool forces all test sessions to use
-# the same connection so the database remains available throughout
-# a test.
+# Tests use an isolated in-memory SQLite database instead of the
+# development batches.db file.
+#
+# StaticPool keeps the same in-memory database available across
+# different SQLAlchemy sessions. The sessions themselves are still
+# created independently for each request.
 TEST_DATABASE_URL = "sqlite://"
 
 test_engine = create_engine(
@@ -32,8 +34,9 @@ def db_session():
     """
     Create a clean database for each test.
 
-    Each test starts with an empty database and therefore cannot
-    accidentally depend on data created by another test.
+    This fixture is useful for tests that need direct access to the
+    database. API requests use the client fixture below and receive
+    their own session.
     """
     Base.metadata.create_all(bind=test_engine)
 
@@ -47,22 +50,37 @@ def db_session():
 
 
 @pytest.fixture
-def client(db_session):
+def client():
     """
-    Create a FastAPI test client using the isolated test database.
+    Create a FastAPI test client.
+
+    A new SQLAlchemy session is created for every API request.
+    This is important because concurrent requests must not share
+    the same SQLAlchemy Session.
     """
+
+    # Make sure the test database schema exists before requests begin.
+    Base.metadata.create_all(bind=test_engine)
 
     def override_get_db():
-        yield db_session
+        # Each API request gets its own independent SQLAlchemy session.
+        #
+        # This mirrors the application's real request lifecycle and
+        # allows concurrent requests to operate independently.
+        db = TestingSessionLocal()
 
-    # Replace the application's real database dependency with our
-    # isolated test database. This prevents tests from touching
-    # batches.db.
+        try:
+            yield db
+        finally:
+            db.close()
+
     app.dependency_overrides[get_db] = override_get_db
 
     with TestClient(app) as test_client:
         yield test_client
 
-    # Always clear dependency overrides after the test so one test
-    # cannot affect another test.
+    # Clear dependency overrides so one test cannot affect another.
     app.dependency_overrides.clear()
+
+    # Remove all test data after the test completes.
+    Base.metadata.drop_all(bind=test_engine)
