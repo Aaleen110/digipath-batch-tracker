@@ -201,7 +201,7 @@ def list_batches(
 
     if batch_type is not None:
         query = query.filter(
-            Batch.batch_type == batch_type
+            func.lower(Batch.batch_type) == batch_type.lower()
         )
 
     total = query.with_entities(
