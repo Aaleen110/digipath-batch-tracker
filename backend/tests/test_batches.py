@@ -1,4 +1,6 @@
 import threading
+from unittest.mock import patch
+import httpx
 
 
 # happy path
@@ -231,7 +233,7 @@ def test_create_batch_is_idempotent(client):
     assert second_batch["submitted_by"] == first_batch["submitted_by"]
 
 
-#filtering by status
+# filtering by status
 def test_list_batches_with_status_filter(client):
     headers = {
         "X-API-Key": "dev-secret-key",
@@ -300,7 +302,7 @@ def test_list_batches_with_status_filter(client):
     assert any(batch["id"] == first_batch_id for batch in data["items"])
 
 
-#filtering by batch type
+# filtering by batch type
 def test_list_batches_with_type_filter(client):
     headers = {
         "X-API-Key": "dev-secret-key",
@@ -347,7 +349,7 @@ def test_list_batches_with_type_filter(client):
     assert all(batch["batch_type"] == "RNA" for batch in data["items"])
 
 
-#pagination test
+# pagination test
 def test_list_batches_pagination(client):
     headers = {
         "X-API-Key": "dev-secret-key",
@@ -386,3 +388,157 @@ def test_list_batches_pagination(client):
     assert len(data["items"]) == 2
     assert data["page"] == 1
     assert data["page_size"] == 2
+
+
+# webhook notification test
+def test_notify_batch_success(client):
+    headers = {
+        "X-API-Key": "dev-secret-key",
+        "Idempotency-Key": "test-notify-success-001",
+    }
+
+    # Use a public-looking HTTPS URL for the partner webhook.
+    # The actual network request will be mocked below.
+    webhook_url = "https://partner.example.com/webhook"
+
+    create_response = client.post(
+        "/batches",
+        headers=headers,
+        json={
+            "sample_id": "SAMPLE-NOTIFY-001",
+            "batch_type": "PCR",
+            "submitted_by": "lab-user-01",
+            "partner_webhook": webhook_url,
+        },
+    )
+
+    assert create_response.status_code == 201
+
+    batch_id = create_response.json()["id"]
+
+    # Mock DNS resolution because the test must never perform real
+    # external network operations.
+    fake_address = (
+        None,
+        None,
+        None,
+        None,
+        ("93.184.216.34", 443),
+    )
+
+    with (
+        patch(
+            "app.services.notify.socket.getaddrinfo",
+            return_value=[fake_address],
+        ),
+        patch(
+            "app.services.notify.httpx.post",
+        ) as mock_post,
+    ):
+        # Simulate a successful partner response.
+        mock_post.return_value.raise_for_status.return_value = None
+
+        response = client.post(
+            f"/batches/{batch_id}/notify",
+            headers={
+                "X-API-Key": "dev-secret-key",
+            },
+        )
+
+    assert response.status_code == 202
+
+    data = response.json()
+
+    assert data["batch_id"] == batch_id
+    assert data["message"] == "Batch notification sent successfully"
+
+    # Verify that our service actually attempted to call the
+    # configured partner webhook.
+    mock_post.assert_called_once_with(
+        webhook_url,
+        json={
+            "batch_id": batch_id,
+            "sample_id": "SAMPLE-NOTIFY-001",
+            "batch_type": "PCR",
+            "status": "queued",
+            "result": None,
+        },
+        timeout=5,
+    )
+
+
+# webhook notification failure with retries
+def test_notify_batch_retries_on_webhook_failure(client):
+    headers = {
+        "X-API-Key": "dev-secret-key",
+        "Idempotency-Key": "test-notify-retry-001",
+    }
+
+    webhook_url = "https://partner.example.com/webhook"
+
+    create_response = client.post(
+        "/batches",
+        headers=headers,
+        json={
+            "sample_id": "SAMPLE-NOTIFY-002",
+            "batch_type": "PCR",
+            "submitted_by": "lab-user-01",
+            "partner_webhook": webhook_url,
+        },
+    )
+
+    assert create_response.status_code == 201
+
+    batch_id = create_response.json()["id"]
+
+    fake_address = (
+        None,
+        None,
+        None,
+        None,
+        ("93.184.216.34", 443),
+    )
+
+    with (
+        patch(
+            "app.services.notify.socket.getaddrinfo",
+            return_value=[fake_address],
+        ),
+        patch(
+            "app.services.notify.httpx.post",
+        ) as mock_post,
+        patch(
+            "app.services.notify.time.sleep",
+        ) as mock_sleep,
+    ):
+        # Simulate the partner webhook failing on every attempt.
+        mock_post.side_effect = httpx.ConnectError("Partner unavailable")
+
+        response = client.post(
+            f"/batches/{batch_id}/notify",
+            headers={
+                "X-API-Key": "dev-secret-key",
+            },
+        )
+
+    assert response.status_code == 502
+
+    data = response.json()
+
+    assert data["detail"] == "Webhook notification failed after all retries"
+
+    # MAX_RETRIES is 3, so the implementation makes 4 total attempts.
+    assert mock_post.call_count == 4
+
+    # Exponential backoff should be:
+    #
+    # attempt 1 -> sleep 1 second
+    # attempt 2 -> sleep 2 seconds
+    # attempt 3 -> sleep 4 seconds
+    #
+    # No sleep occurs after the final attempt.
+    assert [call.args[0] for call in mock_sleep.call_args_list] == [
+        1,
+        2,
+        4,
+    ]
