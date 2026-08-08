@@ -349,6 +349,43 @@ def test_list_batches_with_type_filter(client):
     assert all(batch["batch_type"] == "RNA" for batch in data["items"])
 
 
+def test_list_batches_type_filter_is_case_insensitive(client):
+    headers = {
+        "X-API-Key": "dev-secret-key",
+    }
+
+    create_response = client.post(
+        "/batches",
+        headers={
+            **headers,
+            "Idempotency-Key": "test-list-type-case-001",
+        },
+        json={
+            "sample_id": "SAMPLE-TYPE-CASE-001",
+            "batch_type": "PCR",
+            "submitted_by": "lab-user-01",
+        },
+    )
+
+    assert create_response.status_code == 201
+
+    batch_id = create_response.json()["id"]
+
+    response = client.get(
+        "/batches",
+        headers=headers,
+        params={
+            "type": "pcr",
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert any(batch["id"] == batch_id for batch in data["items"])
+
+
 # pagination test
 def test_list_batches_pagination(client):
     headers = {
