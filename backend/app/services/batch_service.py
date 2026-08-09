@@ -11,6 +11,7 @@ from app.schemas import BatchStatus, CreateBatchRequest
 logger = logging.getLogger(__name__)
 
 
+# Allowed pipeline moves — completed/failed are terminal
 VALID_TRANSITIONS: dict[BatchStatus, set[BatchStatus]] = {
     BatchStatus.QUEUED: {
         BatchStatus.PROCESSING,
@@ -80,6 +81,7 @@ def create_batch(
     payload: CreateBatchRequest,
     idempotency_key: str,
 ) -> CreateBatchResult:
+    # Fast path: same Idempotency-Key already created this batch
     existing_batch = (
         db.query(Batch)
         .filter(Batch.idempotency_key == idempotency_key)
@@ -122,6 +124,7 @@ def create_batch(
         return CreateBatchResult(batch=batch, created=True)
 
     except IntegrityError:
+        # Slow path: two requests with the same key raced — unique constraint caught the loser
         db.rollback()
 
         existing_batch = (
@@ -155,6 +158,7 @@ def update_batch_status(
     if not is_valid_transition(current_status, new_status):
         raise InvalidTransitionError(current_status, new_status)
 
+    # Status check is IN the UPDATE — only one concurrent request can win (rowcount == 1)
     result = db.execute(
         update(Batch)
         .where(
@@ -165,6 +169,7 @@ def update_batch_status(
     )
 
     if result.rowcount != 1:
+        # Someone else changed status between our read and this write
         db.rollback()
         logger.warning(
             "Batch status update conflict",
@@ -201,6 +206,7 @@ def _apply_list_filters(
         query = query.filter(Batch.status == status_filter.value)
 
     if batch_type is not None:
+        # Case-insensitive so "pcr" matches "PCR" in the DB
         query = query.filter(
             func.lower(Batch.batch_type) == batch_type.lower()
         )
@@ -217,6 +223,7 @@ def list_batches(
     page_size: int,
 ) -> BatchListResult:
     offset = (page - 1) * page_size
+    # COUNT() OVER() gives total + page rows in one query (fallback count if page is empty)
     total_count = func.count(Batch.id).over().label("total_count")
 
     query = _apply_list_filters(

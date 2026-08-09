@@ -45,6 +45,7 @@ export function CreateBatchModal({ open, onClose, onSubmit }: CreateBatchModalPr
         submitted_by: form.submitted_by.trim(),
         partner_webhook: form.partner_webhook?.trim() || null,
       }
+      // New UUID each submit — fine for normal use; would keep same key until success for retries
       await onSubmit(payload, crypto.randomUUID())
       onClose()
     } finally {

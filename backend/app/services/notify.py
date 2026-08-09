@@ -93,6 +93,7 @@ def notify_webhook(
     validate_webhook_url(webhook_url)
 
     for attempt in range(MAX_RETRIES + 1):
+        # MAX_RETRIES=3 → 4 attempts total (initial + 3 retries)
         try:
             response = httpx.post(
                 webhook_url,
@@ -119,6 +120,7 @@ def notify_webhook(
 
             # Exponential backoff prevents us from repeatedly hitting
             # a partner service that may already be unavailable.
+            # TODO: move to background job — this blocks the HTTP request during sleep
             backoff = INITIAL_BACKOFF_SECONDS * (2**attempt)
 
             time.sleep(backoff)
