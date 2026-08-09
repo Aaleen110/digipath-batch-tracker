@@ -29,6 +29,7 @@ from app.services.notify import (
 
 logger = logging.getLogger(__name__)
 
+# Auth on the whole router using Depends — /health in main.py stays public
 router = APIRouter(
     prefix="/batches",
     tags=["batches"],
@@ -61,6 +62,7 @@ def create_batch(
         )
 
     result = create_batch_service(db, payload, idempotency_key)
+    # 201 = new batch, 200 = idempotent replay 
     response.status_code = (
         status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
     )
@@ -95,11 +97,13 @@ def update_batch_status(
     except BatchNotFoundError as exc:
         raise _batch_not_found() from exc
     except InvalidTransitionError as exc:
+        # e.g. queued → completed skips processing
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
     except StatusConflictError as exc:
+        # Lost a race — another request already moved this batch
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Batch status was changed by another request",
@@ -175,6 +179,7 @@ def notify_batch(
         "result": batch.result,
     }
 
+    # NOTE: no dedup yet — calling notify twice sends two webhooks (see REVIEW.md)
     try:
         notify_webhook(
             webhook_url=batch.partner_webhook,
@@ -182,6 +187,7 @@ def notify_batch(
         )
 
     except UnsafeWebhookURLError as exc:
+        # Don't leak SSRF details to the client — generic message only
         logger.warning(
             "Unsafe webhook URL rejected",
             extra={

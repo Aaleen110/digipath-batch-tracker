@@ -6,6 +6,7 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.
 ) ?? ''
 const API_KEY = (import.meta.env.VITE_API_KEY as string | undefined) ?? ''
 
+// Single fetch wrapper — every API call goes through here with X-API-Key attached
 async function safeMessage(res: Response): Promise<string> {
   try {
     const json = (await res.json()) as {
@@ -32,6 +33,7 @@ export async function apiRequest<T>(
   } = {},
 ): Promise<T> {
   if (!API_KEY.trim()) {
+    // Fail early with a clear message — matches Task 3 invalid-token UX
     throw new ApiError(
       'Missing VITE_API_KEY in frontend/.env. Set it to match the backend API_KEY.',
       'config',
@@ -52,6 +54,7 @@ export async function apiRequest<T>(
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     })
   } catch {
+    // fetch throws on network failure (backend down, CORS, etc.)
     throw new ApiError(
       'Could not reach the API. Is the backend running on port 8000?',
       'network',
@@ -116,6 +119,7 @@ export function listBatches(params: {
 }
 
 export function createBatch(payload: CreateBatchRequest, idempotencyKey: string) {
+  // Idempotency-Key header — backend uses it to prevent duplicate batches on retry
   return apiRequest<Batch>('/batches', {
     method: 'POST',
     body: payload,

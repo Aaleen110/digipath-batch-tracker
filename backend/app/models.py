@@ -13,6 +13,7 @@ def utc_now() -> datetime:
 class Batch(Base):
     __tablename__ = "batches"
 
+    # Indexes for GET /batches?status=&type= — see README scaling section
     __table_args__ = (
         Index("ix_batches_status", "status"),
         Index("ix_batches_batch_type", "batch_type"),
@@ -58,6 +59,7 @@ class Batch(Base):
         nullable=True,
     )
 
+    # Client-supplied on POST /batches — unique so retries don't create duplicates
     idempotency_key: Mapped[str] = mapped_column(
         String(255),
         nullable=False,

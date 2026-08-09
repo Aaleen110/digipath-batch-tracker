@@ -26,6 +26,7 @@ export default function App() {
 
   const [statusFilter, setStatusFilter] = useState('')
   const [typeInput, setTypeInput] = useState('')
+  // Debounce type filter so we don't hit the API on every keystroke
   const debouncedType = useDebouncedValue(typeInput, 350)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -51,6 +52,7 @@ export default function App() {
     setLoading(true)
     setError(null)
 
+      // Manual fetch — would swap for TanStack Query with more time
       ; (async () => {
         try {
           const json = await listBatches({
@@ -75,7 +77,7 @@ export default function App() {
       })()
 
     return () => {
-      cancelled = true
+      cancelled = true  // ignore stale response if filters changed mid-flight
     }
   }, [statusFilter, debouncedType, page, pageSize, reloadTick])
 
@@ -83,6 +85,7 @@ export default function App() {
     async (batch: Batch, newStatus: BatchStatus) => {
       setPendingIds((prev) => new Set(prev).add(batch.id))
       const prevStatus = batch.status
+      // Optimistic update — show new status immediately, roll back if API fails
       setBatches((list) =>
         list.map((b) => (b.id === batch.id ? { ...b, status: newStatus } : b)),
       )
@@ -104,6 +107,7 @@ export default function App() {
           `${batch.sample_id || `Batch ${batch.id}`} moved to ${STATUS_META[newStatus].label}.`,
         )
       } catch (err) {
+        // Rollback to previous status on failure (Task 3 requirement)
         setBatches((list) =>
           list.map((b) =>
             b.id === batch.id ? { ...b, status: prevStatus } : b,
