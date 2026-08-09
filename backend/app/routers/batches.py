@@ -1,11 +1,10 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import func, update
-from sqlalchemy.exc import IntegrityError
+import logging
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.auth import verify_api_key
 from app.database import get_db
-from app.models import Batch
 from app.schemas import (
     BatchListResponse,
     BatchResponse,
@@ -13,19 +12,35 @@ from app.schemas import (
     CreateBatchRequest,
     UpdateStatusRequest,
 )
-from app.services.batch_service import is_valid_transition
+from app.services.batch_service import (
+    BatchNotFoundError,
+    InvalidTransitionError,
+    StatusConflictError,
+    create_batch as create_batch_service,
+    get_batch_or_404,
+    list_batches as list_batches_service,
+    update_batch_status as update_batch_status_service,
+)
 from app.services.notify import (
     UnsafeWebhookURLError,
     WebhookNotificationError,
     notify_webhook,
 )
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/batches",
     tags=["batches"],
     dependencies=[Depends(verify_api_key)],
 )
+
+
+def _batch_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Batch not found",
+    )
 
 
 @router.post(
@@ -35,6 +50,7 @@ router = APIRouter(
 )
 def create_batch(
     payload: CreateBatchRequest,
+    response: Response,
     idempotency_key: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ):
@@ -44,44 +60,11 @@ def create_batch(
             detail="Idempotency-Key header is required",
         )
 
-    existing_batch = (
-        db.query(Batch)
-        .filter(Batch.idempotency_key == idempotency_key)
-        .first()
+    result = create_batch_service(db, payload, idempotency_key)
+    response.status_code = (
+        status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
     )
-
-    if existing_batch:
-        return existing_batch
-
-    try:
-        batch = Batch(
-            sample_id=payload.sample_id,
-            batch_type=payload.batch_type,
-            submitted_by=payload.submitted_by,
-            partner_webhook=payload.partner_webhook,
-            status="queued",
-            idempotency_key=idempotency_key,
-        )
-
-        db.add(batch)
-        db.commit()
-        db.refresh(batch)
-
-        return batch
-
-    except IntegrityError:
-        db.rollback()
-
-        existing_batch = (
-            db.query(Batch)
-            .filter(Batch.idempotency_key == idempotency_key)
-            .first()
-        )
-
-        if existing_batch:
-            return existing_batch
-
-        raise
+    return result.batch
 
 
 @router.get(
@@ -92,19 +75,10 @@ def get_batch(
     batch_id: int,
     db: Session = Depends(get_db),
 ):
-    batch = (
-        db.query(Batch)
-        .filter(Batch.id == batch_id)
-        .first()
-    )
-
-    if not batch:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Batch not found",
-        )
-
-    return batch
+    try:
+        return get_batch_or_404(db, batch_id)
+    except BatchNotFoundError as exc:
+        raise _batch_not_found() from exc
 
 
 @router.patch(
@@ -116,54 +90,20 @@ def update_batch_status(
     payload: UpdateStatusRequest,
     db: Session = Depends(get_db),
 ):
-    batch = (
-        db.query(Batch)
-        .filter(Batch.id == batch_id)
-        .first()
-    )
-
-    if not batch:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Batch not found",
-        )
-
-    current_status = BatchStatus(batch.status)
-    new_status = payload.status
-
-    if not is_valid_transition(current_status, new_status):
+    try:
+        return update_batch_status_service(db, batch_id, payload.status)
+    except BatchNotFoundError as exc:
+        raise _batch_not_found() from exc
+    except InvalidTransitionError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Invalid status transition: "
-                f"{current_status.value} -> {new_status.value}"
-            ),
-        )
-
-    # The status check is part of the UPDATE itself. This makes the
-    # transition atomic and prevents two concurrent requests from
-    # both successfully changing the same state.
-    result = db.execute(
-        update(Batch)
-        .where(
-            Batch.id == batch_id,
-            Batch.status == current_status.value,
-        )
-        .values(status=new_status.value)
-    )
-
-    if result.rowcount != 1:
-        db.rollback()
-
+            detail=str(exc),
+        ) from exc
+    except StatusConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Batch status was changed by another request",
-        )
-
-    db.commit()
-    db.refresh(batch)
-
-    return batch
+        ) from exc
 
 
 @router.get(
@@ -192,37 +132,19 @@ def list_batches(
     ),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Batch)
-
-    if status_filter is not None:
-        query = query.filter(
-            Batch.status == status_filter.value
-        )
-
-    if batch_type is not None:
-        query = query.filter(
-            func.lower(Batch.batch_type) == batch_type.lower()
-        )
-
-    total = query.with_entities(
-        func.count(Batch.id)
-    ).scalar()
-
-    offset = (page - 1) * page_size
-
-    batches = (
-        query
-        .order_by(Batch.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-        .all()
+    result = list_batches_service(
+        db,
+        status_filter=status_filter,
+        batch_type=batch_type,
+        page=page,
+        page_size=page_size,
     )
 
     return BatchListResponse(
-        items=batches,
-        page=page,
-        page_size=page_size,
-        total=total,
+        items=result.items,
+        page=result.page,
+        page_size=result.page_size,
+        total=result.total,
     )
 
 
@@ -234,17 +156,10 @@ def notify_batch(
     batch_id: int,
     db: Session = Depends(get_db),
 ):
-    batch = (
-        db.query(Batch)
-        .filter(Batch.id == batch_id)
-        .first()
-    )
-
-    if not batch:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Batch not found",
-        )
+    try:
+        batch = get_batch_or_404(db, batch_id)
+    except BatchNotFoundError as exc:
+        raise _batch_not_found() from exc
 
     if not batch.partner_webhook:
         raise HTTPException(
@@ -267,14 +182,26 @@ def notify_batch(
         )
 
     except UnsafeWebhookURLError as exc:
-        # Never expose internal networking details to the API consumer.
-        # The service logs/security layer can capture the detailed reason.
+        logger.warning(
+            "Unsafe webhook URL rejected",
+            extra={
+                "event": "batch.notify.unsafe_url",
+                "batch_id": batch.id,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or unsafe webhook URL",
         ) from exc
 
     except WebhookNotificationError as exc:
+        logger.error(
+            "Webhook notification failed",
+            extra={
+                "event": "batch.notify.failure",
+                "batch_id": batch.id,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),

@@ -220,7 +220,7 @@ def test_create_batch_is_idempotent(client):
         json=payload,
     )
 
-    assert second_response.status_code == 201
+    assert second_response.status_code == 200
 
     second_batch = second_response.json()
 
