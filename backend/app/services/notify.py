@@ -1,9 +1,12 @@
 import ipaddress
+import logging
 import socket
 import time
 from urllib.parse import urlparse
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class WebhookNotificationError(Exception):
@@ -32,6 +35,10 @@ def validate_webhook_url(webhook_url: str) -> None:
     # We only allow HTTPS because webhook communication may contain
     # sensitive batch information and should be encrypted in transit.
     if parsed_url.scheme != "https":
+        logger.warning(
+            "Webhook URL rejected: non-HTTPS scheme",
+            extra={"event": "webhook.validation.rejected", "reason": "scheme"},
+        )
         raise UnsafeWebhookURLError(
             "Webhook URL must use HTTPS"
         )
@@ -99,6 +106,13 @@ def notify_webhook(
 
         except (httpx.HTTPError, httpx.TimeoutException) as exc:
             if attempt == MAX_RETRIES:
+                logger.error(
+                    "Webhook notification failed after all retries",
+                    extra={
+                        "event": "webhook.notify.failure",
+                        "attempts": MAX_RETRIES + 1,
+                    },
+                )
                 raise WebhookNotificationError(
                     "Webhook notification failed after all retries"
                 ) from exc
