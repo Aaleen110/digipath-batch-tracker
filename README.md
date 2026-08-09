@@ -165,6 +165,7 @@ If list/filter became slow as data grew, I would:
 - Admin dashboard for system management
 - Sentry for error monitoring
 - notified_at + notification_status on Batch for idempotency on sending notification again
+- Postman collection + Newman in CI — pytest covers the logic well, but a Postman suite is handy for smoke-testing the real running API (auth headers, idempotency, status codes).
 
 ### Frontend
 - TanStack Query — right now list fetching is all manual in App.tsx (useEffect + reloadTick). Would clean that up a lot.
