@@ -58,7 +58,30 @@ source .venv/bin/activate
 pytest tests/ -v
 ```
 
+Running one test file
+```bash
+pytest tests/test_batches.py::test_create_batch_success -v
+```
+
+One test function
+```bash
+pytest tests/test_batches.py::test_create_batch_success -v
+```
+
+
 Tests use an isolated in-memory SQLite database (not `batches.db`).
+
+### 5. API smoke tests (Postman / Newman)
+
+With the API running on port 8000:
+
+```bash
+cd postman
+npm install
+npm run smoke
+```
+
+See `postman/README.md` for overrides and CI reporting.
 
 ---
 

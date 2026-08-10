@@ -1,0 +1,364 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "DigiPath Batch Tracker",
+    "description": "Smoke collection for DigiPath Batch Tracker API.\n\nEnvironment variables:\n- baseURL\n- apiKey\n- batchId (set by Create Batch)\n- partnerWebhook (defaults to https://httpbin.org/post)\n\nRun requests in order for a full smoke path.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "idempotencyKey", "value": "" },
+    { "key": "sampleId", "value": "" },
+    { "key": "partnerWebhook", "value": "https://postman-echo.com/post" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "var baseURL = pm.environment.get('baseURL');",
+          "var apiKey = pm.environment.get('apiKey');",
+          "if (!baseURL) { throw new Error('Environment variable baseURL is missing.'); }",
+          "if (!apiKey) { throw new Error('Environment variable apiKey is missing.'); }"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Response time < 20000ms', function () {",
+          "  pm.expect(pm.response.responseTime).to.be.below(20000);",
+          "});",
+          "pm.test('Content-Type is JSON', function () {",
+          "  pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Body is valid JSON', function () {",
+              "  pm.response.to.be.json;",
+              "});",
+              "var healthBody = pm.response.json();",
+              "pm.test('Health schema', function () {",
+              "  pm.expect(healthBody).to.be.an('object');",
+              "  pm.expect(healthBody.status).to.eql('ok');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseURL}}/health",
+        "description": "Public health check — no API key required."
+      }
+    },
+    {
+      "name": "1. Create Batch",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var stamp = Date.now();",
+              "pm.collectionVariables.set('idempotencyKey', 'smoke-' + stamp);",
+              "pm.collectionVariables.set('sampleId', 'SAMPLE-SMOKE-' + stamp);",
+              "var envWebhook = pm.environment.get('partnerWebhook');",
+              "if (envWebhook) {",
+              "  pm.collectionVariables.set('partnerWebhook', envWebhook);",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 201 Created', function () {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "pm.test('Body is valid JSON', function () {",
+              "  pm.response.to.be.json;",
+              "});",
+              "var createBody = pm.response.json();",
+              "var allowedStatuses = ['queued', 'processing', 'completed', 'failed'];",
+              "pm.test('BatchResponse schema', function () {",
+              "  pm.expect(createBody).to.include.keys(",
+              "    'id', 'sample_id', 'batch_type', 'submitted_by',",
+              "    'status', 'result', 'partner_webhook', 'created_at', 'updated_at'",
+              "  );",
+              "  pm.expect(createBody.id).to.be.a('number').and.to.be.above(0);",
+              "  pm.expect(createBody.sample_id).to.be.a('string').and.to.have.lengthOf.at.least(1);",
+              "  pm.expect(createBody.batch_type).to.be.a('string').and.to.have.lengthOf.at.least(1);",
+              "  pm.expect(createBody.submitted_by).to.be.a('string').and.to.have.lengthOf.at.least(1);",
+              "  pm.expect(allowedStatuses).to.include(createBody.status);",
+              "  pm.expect(Number.isNaN(Date.parse(createBody.created_at))).to.eql(false);",
+              "  pm.expect(Number.isNaN(Date.parse(createBody.updated_at))).to.eql(false);",
+              "});",
+              "pm.test('New batch starts as queued', function () {",
+              "  pm.expect(createBody.status).to.eql('queued');",
+              "});",
+              "pm.test('Echoes request fields', function () {",
+              "  pm.expect(createBody.sample_id).to.eql(pm.collectionVariables.get('sampleId'));",
+              "  pm.expect(createBody.batch_type).to.eql('PCR');",
+              "  pm.expect(createBody.submitted_by).to.eql('lab-user-01');",
+              "});",
+              "pm.test('Persist batchId to environment', function () {",
+              "  pm.expect(createBody.id).to.be.a('number');",
+              "  pm.environment.set('batchId', String(createBody.id));",
+              "  console.log('Saved batchId to environment:', createBody.id);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" },
+          { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"sample_id\": \"{{sampleId}}\",\n  \"batch_type\": \"PCR\",\n  \"submitted_by\": \"lab-user-01\",\n  \"partner_webhook\": \"{{partnerWebhook}}\"\n}"
+        },
+        "url": "{{baseURL}}/batches",
+        "description": "Create a batch. Writes batchId into the active Postman/Newman environment."
+      }
+    },
+    {
+      "name": "2. Get Batch",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var batchId = pm.environment.get('batchId');",
+              "if (!batchId) {",
+              "  throw new Error('batchId is empty. Run Create Batch first.');",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Body is valid JSON', function () {",
+              "  pm.response.to.be.json;",
+              "});",
+              "var getBody = pm.response.json();",
+              "var expectedId = pm.environment.get('batchId');",
+              "var allowedStatuses = ['queued', 'processing', 'completed', 'failed'];",
+              "pm.test('BatchResponse schema', function () {",
+              "  pm.expect(getBody).to.include.keys(",
+              "    'id', 'sample_id', 'batch_type', 'submitted_by',",
+              "    'status', 'result', 'partner_webhook', 'created_at', 'updated_at'",
+              "  );",
+              "  pm.expect(getBody.id).to.be.a('number');",
+              "  pm.expect(allowedStatuses).to.include(getBody.status);",
+              "});",
+              "pm.test('Returns the batch saved in environment', function () {",
+              "  pm.expect(String(getBody.id)).to.eql(String(expectedId));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" }
+        ],
+        "url": "{{baseURL}}/batches/{{batchId}}",
+        "description": "Fetch batch detail by environment batchId."
+      }
+    },
+    {
+      "name": "3. List Batches",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Body is valid JSON', function () {",
+              "  pm.response.to.be.json;",
+              "});",
+              "var listBody = pm.response.json();",
+              "pm.test('BatchListResponse schema', function () {",
+              "  pm.expect(listBody).to.include.keys('items', 'page', 'page_size', 'total');",
+              "  pm.expect(listBody.items).to.be.an('array');",
+              "  pm.expect(listBody.page).to.eql(1);",
+              "  pm.expect(listBody.page_size).to.eql(20);",
+              "  pm.expect(listBody.total).to.be.a('number').and.to.be.at.least(listBody.items.length);",
+              "});",
+              "pm.test('Filter matches status=queued and type=PCR', function () {",
+              "  listBody.items.forEach(function (batch) {",
+              "    pm.expect(batch.status).to.eql('queued');",
+              "    pm.expect(batch.batch_type).to.eql('PCR');",
+              "  });",
+              "});",
+              "var listedBatchId = pm.environment.get('batchId');",
+              "if (listedBatchId) {",
+              "  pm.test('List includes created batchId when still queued', function () {",
+              "    var ids = listBody.items.map(function (b) { return String(b.id); });",
+              "    pm.expect(ids).to.include(String(listedBatchId));",
+              "  });",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/batches?status=queued&type=PCR&page=1&page_size=20",
+          "host": ["{{baseURL}}"],
+          "path": ["batches"],
+          "query": [
+            { "key": "status", "value": "queued" },
+            { "key": "type", "value": "PCR" },
+            { "key": "page", "value": "1" },
+            { "key": "page_size", "value": "20" }
+          ]
+        },
+        "description": "List/filter batches with pagination."
+      }
+    },
+    {
+      "name": "4. Update Status",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var batchId = pm.environment.get('batchId');",
+              "if (!batchId) {",
+              "  throw new Error('batchId is empty. Run Create Batch first.');",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Body is valid JSON', function () {",
+              "  pm.response.to.be.json;",
+              "});",
+              "var patchBody = pm.response.json();",
+              "pm.test('BatchResponse schema', function () {",
+              "  pm.expect(patchBody).to.include.keys(",
+              "    'id', 'sample_id', 'batch_type', 'submitted_by',",
+              "    'status', 'result', 'partner_webhook', 'created_at', 'updated_at'",
+              "  );",
+              "});",
+              "pm.test('Transition queued → processing succeeded', function () {",
+              "  pm.expect(String(patchBody.id)).to.eql(String(pm.environment.get('batchId')));",
+              "  pm.expect(patchBody.status).to.eql('processing');",
+              "});",
+              "pm.test('updated_at is present', function () {",
+              "  pm.expect(patchBody.updated_at).to.be.a('string');",
+              "  pm.expect(Number.isNaN(Date.parse(patchBody.updated_at))).to.eql(false);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"processing\"\n}"
+        },
+        "url": "{{baseURL}}/batches/{{batchId}}/status",
+        "description": "Valid transition: queued → processing."
+      }
+    },
+    {
+      "name": "5. Notify Batch",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "var batchId = pm.environment.get('batchId');",
+              "if (!batchId) {",
+              "  throw new Error('batchId is empty. Run Create Batch first.');",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Body is valid JSON', function () {",
+              "  pm.response.to.be.json;",
+              "});",
+              "var notifyBody = pm.response.json();",
+              "pm.test('Notify succeeded (202)', function () {",
+              "  pm.response.to.have.status(202);",
+              "});",
+              "pm.test('Success payload shape', function () {",
+              "  pm.expect(notifyBody).to.include.keys('message', 'batch_id');",
+              "  pm.expect(notifyBody.message).to.be.a('string').and.to.include('successfully');",
+              "  pm.expect(String(notifyBody.batch_id)).to.eql(String(pm.environment.get('batchId')));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-API-Key", "value": "{{apiKey}}" }
+        ],
+        "url": "{{baseURL}}/batches/{{batchId}}/notify",
+        "description": "Notify partner webhook. Defaults to https://postman-echo.com/post for local smoke."
+      }
+    }
+  ]
+}
