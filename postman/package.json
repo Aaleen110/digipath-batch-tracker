@@ -1,0 +1,13 @@
+{
+  "name": "digipath-batch-tracker-smoke",
+  "private": true,
+  "description": "Newman smoke tests for DigiPath Batch Tracker API",
+  "scripts": {
+    "smoke": "newman run DigiPath-Batch-Tracker.postman_collection.json -e local.postman_environment.json --color on",
+    "smoke:verbose": "newman run DigiPath-Batch-Tracker.postman_collection.json -e local.postman_environment.json --verbose",
+    "smoke:ci": "mkdir -p results && newman run DigiPath-Batch-Tracker.postman_collection.json -e local.postman_environment.json --reporters cli,junit --reporter-junit-export results/newman-junit.xml"
+  },
+  "devDependencies": {
+    "newman": "^6.2.1"
+  }
+}
